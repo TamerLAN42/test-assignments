@@ -11,3 +11,4 @@
 Если у вас есть вопросы или предложения, не стесняйтесь обращаться ко мне:
 
 [![Static Badge](https://img.shields.io/badge/Telegram-@TamerLAN427-blue)](https://t.me/TamerLAN427)
+[![Static Badge](https://img.shields.io/badge/📧Email-tamerlan42@inbox.ru-orange)](mailto:tamerlan42@inbox.ru)  
