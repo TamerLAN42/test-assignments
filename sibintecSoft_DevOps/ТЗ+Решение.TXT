@@ -1,0 +1,269 @@
+Задание 1. Ответьте на вопросы:
+1.1. каким образом в git объединить два коммита в один?
+git rebase -i HEAD~2    (Если для двух последних)
+В открывшемся редакторе заменить pick на squash или fixup
+
+1.2. что такое демоны в linux?
+Фоновые процессы, работающие независимо от пользовательского терминала. Обычно управляются системными менеджерами вроде systemd
+
+1.3. как проверить, что демон запущен?
+systemctl status Имя_Демона
+Или в общем списке:
+ps aux | grep Имя_Демона
+
+1.4. как проверить, что демон будет запускаться при старте системы?
+systemctl is-enabled Имя_Демона
+Вывод должен вернуть enabled. Либо в общем списке в графе STATE:
+systemctl list-unit-files --type=service | grep Имя_Демона
+
+1.5. Что такое Twelve-factor app? Опишите практическую реализацию 3 пункта.
+Манифест для разработки масштабируемых веб-приложений. 3 пункт манифеста - конфиг, все значимые данные(API-ключи, учётные данные БД, URL внешних сервисов) должны храниться в переменных окружения. В докере это реализуется через запись в секции environment в docker-compose.yml или через флаг -e при запуске docker run
+
+1.6. Что такое докер и для чего он нужен? Опишите отличие контейнера от виртуальной машины.
+ПО для контейнеризации(запуска в изолированном окружении) приложений. VM даёт возможность установить на один компьютер несколько разных полноценных ОС. Докер обеспечивает виртуализацию на уровне ОС, используя одно общее ядро, и содержит только необходимый минимум для запуска приложения, и ничего более.
+
+1.7. Вы только что установили докер на систему linux. Напишите команду, необходимую для использования докера непривилегированным пользователем <user>.
+usermod -aG docker <user>
+
+Задание 2. Напишите скрипт.
+Скрипт пишется на bash и рассчитан на запуск в среде linux с установленным git, docker и docker-compose.
+Пользователь, запускающий скрипт имеет необходимые права на использование докер, но не имеет прав sudo.
+Скрипт должен выполнить следующие действия:
+1. убедиться, что докер в системе запущен и работает.
+2. убедиться в работоспособности интернета и доступности репозитория с исходным кодом.
+3. создать dockerfile.
+4. собрать из исходников docker-image приложения dashy.
+   (исходный код доступен здесь: github.com/Lissy93/dashy)
+5. выгрузить полученный docker-image в файл.
+6. удалить в докер все контейнеры и очистить локальный registry.
+7. загрузить docker-image из файла.
+8. создать файл docker-compose.yml
+9. при помощи docker-compose запустить контейнер с приложением.
+10. проверить работоспособность приложения.
+
+Важные детали:
+1. В случае возникновения ошибок скрипт должен завершиться с выводом сообщения о соответствующей ошибке. 
+2. при сборке docker-image использовать базовый образ alpine версии 3.17.
+3. приложение должно быть доступно только локально, на порту 8080.
+
+Проверка работоспособности проводилась на ubuntu 24.04.3 LTS
+Скрипт:
+
+#!/bin/bash
+
+set -e
+
+# Конфигурация
+REPO_URL="https://github.com/Lissy93/dashy"
+IMAGE_NAME="dashy-app"
+TAR_FILE="${IMAGE_NAME}.tar"
+DOCKERFILE="Dockerfile"
+DOCKER_COMPOSE_FILE="docker-compose.yml"
+PORT="8080"
+BASE_IMAGE="alpine:3.17"
+
+# Функция для ошибок
+error_exit() {
+    echo "Ошибка: $1" >&2
+    exit 1
+}
+
+# 1. Проверка Docker
+echo "Проверяем Docker..."
+docker info >/dev/null 2>&1 || error_exit "Docker не запущен или нет прав"
+echo "Docker работает"
+
+# 2. Проверка репозитория
+echo "Проверяем доступность репозитория..."
+curl --silent --head --fail "$REPO_URL" >/dev/null 2>&1 || error_exit "Репозиторий недоступен"
+echo "Репозиторий доступен"
+
+# 3. Создаем Dockerfile
+echo "Создаем Dockerfile..."
+cat > "$DOCKERFILE" << EOF
+FROM $BASE_IMAGE
+
+RUN apk add --no-cache nodejs npm git && \\
+    git clone $REPO_URL /app
+
+WORKDIR /app
+
+RUN npm install && npm run build
+
+EXPOSE 4000
+
+CMD ["npm", "start"]
+EOF
+echo "Dockerfile создан"
+
+# 4. Собираем образ
+echo "Собираем Docker образ..."
+docker build -t "$IMAGE_NAME" . || error_exit "Ошибка сборки образа"
+echo "Образ собран"
+
+# 5. Сохраняем образ в файл
+echo "Сохраняем образ в файл..."
+docker save -o "$TAR_FILE" "$IMAGE_NAME" || error_exit "Ошибка сохранения образа"
+echo "Образ сохранен в $TAR_FILE"
+
+# 6. Очищаем Docker
+echo "Очищаем Docker..."
+docker system prune -af --volumes >/dev/null 2>&1 || true
+echo "Docker очищен"
+
+# 7. Загружаем образ из файла
+echo "Загружаем образ из файла..."
+docker load -i "$TAR_FILE" || error_exit "Ошибка загрузки образа"
+echo "Образ загружен"
+
+# 8. Создаем docker-compose.yml
+echo "Создаем docker-compose.yml..."
+cat > "$DOCKER_COMPOSE_FILE" << EOF
+version: '3.8'
+services:
+  dashy:
+    image: $IMAGE_NAME
+    container_name: dashy-container
+    ports:
+      - "127.0.0.1:$PORT:4000"
+    restart: unless-stopped
+EOF
+echo "docker-compose.yml создан"
+
+# 9. Запускаем контейнер
+echo "Запускаем контейнер..."
+docker-compose up -d || error_exit "Ошибка запуска контейнера"
+echo "Контейнер запущен"
+
+# 10. Проверяем работу
+echo "Проверяем работу приложения..."
+sleep 10
+
+if curl --silent --connect-timeout 5 "http://127.0.0.1:$PORT" >/dev/null; then
+    echo "Приложение работает! Доступно по адресу: http://127.0.0.1:$PORT"
+else
+    error_exit "Приложение не отвечает"
+fi
+
+echo "Скрипт выполнен успешно!"
+
+
+
+
+
+
+Задание 3. Доработайте скрипт.
+Настройте произвольный дашборд в приложении. Сохраните дашборд в файл.
+Доработайте скрипт из задания 2 так, чтобы приложение использовало конфигурацию из файла, расположенного локально.
+Файл с дашбордом прикладывать к заданию не нужно.
+
+Лля этого надо перекопировать файл конфигурации в контейнер и подключить его в качестве volume(если нужно чтобы изменения конфигурации сохранялись при пересоздании контейнера)
+В dockerfile:
+COPY conf.yml ./user-data/conf.yml
+В docker-compose.yml:
+    volumes:
+      - ./conf.yml:/app/user-data/conf.yml
+
+Полный скрипт:
+
+#!/bin/bash
+
+set -e
+
+# Конфигурация
+REPO_URL="https://github.com/Lissy93/dashy"
+IMAGE_NAME="dashy-app"
+TAR_FILE="${IMAGE_NAME}.tar"
+DOCKERFILE="Dockerfile"
+DOCKER_COMPOSE_FILE="docker-compose.yml"
+PORT="8080"
+BASE_IMAGE="alpine:3.17"
+
+# Функция для ошибок
+error_exit() {
+    echo "Ошибка: $1" >&2
+    exit 1
+}
+
+# 1. Проверка Docker
+echo "Проверяем Docker..."
+docker info >/dev/null 2>&1 || error_exit "Docker не запущен или нет прав"
+echo "Docker работает"
+
+# 2. Проверка репозитория
+echo "Проверяем доступность репозитория..."
+curl --silent --head --fail "$REPO_URL" >/dev/null 2>&1 || error_exit "Репозиторий недоступен"
+echo "Репозиторий доступен"
+
+# 3. Создаем Dockerfile
+echo "Создаем Dockerfile..."
+cat > "$DOCKERFILE" << EOF
+FROM $BASE_IMAGE
+
+RUN apk add --no-cache nodejs npm git && \\
+    git clone $REPO_URL /app
+
+WORKDIR /app
+
+COPY conf.yml ./user-data/conf.yml
+
+RUN npm install && npm run build
+
+EXPOSE 4000
+
+CMD ["npm", "start"]
+EOF
+echo "Dockerfile создан"
+
+# 4. Собираем образ
+echo "Собираем Docker образ..."
+docker build -t "$IMAGE_NAME" . || error_exit "Ошибка сборки образа"
+echo "Образ собран"
+
+# 5. Сохраняем образ в файл
+echo "Сохраняем образ в файл..."
+docker save -o "$TAR_FILE" "$IMAGE_NAME" || error_exit "Ошибка сохранения образа"
+echo "Образ сохранен в $TAR_FILE"
+
+# 6. Очищаем Docker
+echo "Очищаем Docker..."
+docker system prune -af --volumes >/dev/null 2>&1 || true
+echo "Docker очищен"
+
+# 7. Загружаем образ из файла
+echo "Загружаем образ из файла..."
+docker load -i "$TAR_FILE" || error_exit "Ошибка загрузки образа"
+echo "Образ загружен"
+
+# 8. Создаем docker-compose.yml
+echo "Создаем docker-compose.yml..."
+cat > "$DOCKER_COMPOSE_FILE" << EOF
+version: '3.8'
+services:
+  dashy:
+    image: $IMAGE_NAME
+    container_name: dashy-container
+    volumes:
+      - ./conf.yml:/app/user-data/conf.yml
+    ports:
+      - "127.0.0.1:$PORT:4000"
+    restart: unless-stopped
+EOF
+echo "docker-compose.yml создан"
+
+# 9. Запускаем контейнер
+echo "Запускаем контейнер..."
+docker-compose up -d || error_exit "Ошибка запуска контейнера"
+echo "Контейнер запущен"
+
+# 10. Проверяем работу
+echo "Проверяем работу приложения..."
+sleep 10
+
+if curl --silent --connect-timeout 5 "http://127.0.0.1:$PORT" >/dev/null; then
+    echo "Приложение работает! Доступно по адресу: http://127.0.0.1:$PORT"
+else
+    error_exit "Приложение не отвечает"
+fi
+
+echo "Скрипт выполнен успешно!"
